@@ -7,6 +7,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { BsArrowLeftShort } from 'react-icons/bs';
+import { useEffect } from 'react';
 
 const loginFormSchema = z.object({
   email: z.string().email('Email is invalid'),
@@ -20,6 +21,7 @@ export default function LoginForm() {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isValid },
   } = useForm<LoginFormProps>({
     resolver: zodResolver(loginFormSchema),
@@ -32,10 +34,23 @@ export default function LoginForm() {
     const loginData = otherLoginData;
 
     console.log(loginData);
+    if (data.rememberMe) {
+      localStorage.setItem('email', loginData.email);
+    } else {
+      localStorage.removeItem('email');
+    }
+    // Login request here
   };
 
+  useEffect(() => {
+    const storedEmail = localStorage.getItem('email');
+    if (storedEmail) {
+      setValue('email', storedEmail);
+    }
+  }, [setValue]);
+
   return (
-    <div className='min-h-screen flex flex-col py-12 container xl:max-w-[1600px] mx-auto px-4 sm:px-10 md:px-8 lg:px-16'>
+    <div className='min-h-screen flex flex-col py-12 xl:max-w-[1600px] mx-auto px-4 sm:px-10 md:px-8 lg:px-16'>
       <div className='flex items-start mb-8'>
         <Link
           href='/'
