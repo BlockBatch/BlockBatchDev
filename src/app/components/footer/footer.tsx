@@ -67,21 +67,21 @@ export default function Footer() {
 
           <div className="flex gap-6 mt-4 sm:mt-0">
             <Link
-              href="https://twitter.com/blockbatch"
+              href="#"
               aria-label="Twitter"
               className="text-gray-400 hover:text-gray-500"
             >
               <Twitter className="h-6 w-6" />
             </Link>
             <Link
-              href="https://github.com/blockbatch"
+              href="#"
               aria-label="GitHub"
               className="text-gray-400 hover:text-gray-500"
             >
               <Github className="h-6 w-6" />
             </Link>
             <Link
-              href="https://linkedin.com/company/blockbatch"
+              href="#"
               aria-label="LinkedIn"
               className="text-gray-400 hover:text-gray-500"
             >
