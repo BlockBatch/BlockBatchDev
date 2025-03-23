@@ -1,9 +1,11 @@
-import Image from "next/image";
+import FeaturesOverviewSection from "./components/FeaturesOverviewSection";
+
 
 export default function Home() {
   return (
     <div>
-      Home
+
+<FeaturesOverviewSection />
     </div>
   );
 }
