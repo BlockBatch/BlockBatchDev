@@ -1,10 +1,15 @@
-import Image from "next/image";
 import Hero from './components/Hero';
+import FeaturesOverviewSection from "./components/FeaturesOverviewSection";
+import { ProductDemo } from "@/components/product-demo";
+import FinalCtaSection from "./components/FinalCtaSection";
 
 export default function Home() {
   return (
-    <main>
+    <div>
       <Hero />
-    </main>
+      <FeaturesOverviewSection />
+      <ProductDemo />
+      <FinalCtaSection />
+    </div>
   );
 }
