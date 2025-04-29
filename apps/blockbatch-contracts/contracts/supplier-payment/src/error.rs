@@ -27,7 +27,7 @@ pub enum ContractError {
     // Dispute related errors
     DisputeNotFound = 13,
     DisputeAlreadyResolved = 14,
-    DisputeWindowExpired = 15,
+    DisputeWindowClosed = 15,
     
     // General errors
     InvalidInput = 16,
@@ -51,7 +51,7 @@ impl ContractError {
             Self::PaymentFailed => symbol_short!("PAYFAL"),
             Self::DisputeNotFound => symbol_short!("NODSP"),
             Self::DisputeAlreadyResolved => symbol_short!("DSPRES"),
-            Self::DisputeWindowExpired => symbol_short!("DSPEXP"),
+            Self::DisputeWindowClosed => symbol_short!("DSPEXP"),
             Self::InvalidInput => symbol_short!("INVINP"),
             Self::InternalError => symbol_short!("INTERR"),
         }

@@ -1,45 +1,92 @@
 use soroban_sdk::{
-    Address, Env, String, 
-    IntoVal,
+    Address, BytesN, Env, String, 
+    IntoVal, TryFromVal, Val, Map, Vec, Symbol,
 };
 
-use crate::types::{SupplierPaymentContract, Dispute, DisputeStatus, Asset};
+use crate::types::{SupplierPaymentContract, Dispute, DisputeStatus, Asset, TimePoint, CONTRACT_KEY, DISPUTE_PREFIX};
 use crate::error::ContractError;
 
 /// Save the contract to storage
 pub fn save_contract(env: &Env, contract: &SupplierPaymentContract) {
-    env.storage().instance().set(&1u32, contract);
+    env.storage().instance().set(&Symbol::from_str(env, CONTRACT_KEY), contract);
 }
 
 /// Load the contract from storage
 pub fn load_contract(env: &Env) -> Result<SupplierPaymentContract, ContractError> {
-    match env.storage().instance().get::<u32, SupplierPaymentContract>(&1u32) {
-        Some(contract) => Ok(contract),
+    match env.storage().instance().get(&Symbol::from_str(env, CONTRACT_KEY)) {
+        Some(val) => Ok(val.try_into().unwrap()),
         None => Err(ContractError::ContractNotFound),
     }
 }
 
-/// Store dispute information
-pub fn store_dispute(env: &Env, milestone_index: u64, initiator: Address, reason: String) {
-    let timestamp = env.ledger().timestamp();
-    let dispute = Dispute {
-        milestone_index,
-        initiator,
-        reason,
-        timestamp,
-        status: DisputeStatus::Open,
-    };
+/// Create key for dispute storage
+pub fn get_dispute_key(env: &Env, milestone_index: u64) -> Symbol {
+    // Create a String with the prefix
+    let mut key = String::from_str(env, DISPUTE_PREFIX);
     
-    // Use the milestone_index as the key
-    env.storage().temporary().set(&milestone_index, &dispute);
+    // Convert milestone_index to string and append it
+    let index_str = milestone_index.to_string();
+    let index_str = String::from_str(env, &index_str);
+    
+    // Join the strings
+    key.append(&index_str);
+    
+    // Convert to Symbol for storage
+    Symbol::from_str(env, &key.to_string())
 }
 
-/// Get dispute information
-pub fn get_dispute(env: &Env, milestone_index: u64) -> Result<Dispute, ContractError> {
-    match env.storage().temporary().get::<u64, Dispute>(&milestone_index) {
-        Some(dispute) => Ok(dispute),
+/// Store dispute information
+pub fn store_dispute(env: &Env, milestone_index: u64, dispute: &Dispute) {
+    let key = get_dispute_key(env, milestone_index);
+    env.storage().persistent().set(&key, dispute);
+}
+
+/// Load dispute information
+pub fn load_dispute(env: &Env, milestone_index: u64) -> Result<Dispute, ContractError> {
+    let key = get_dispute_key(env, milestone_index);
+    match env.storage().persistent().get(&key) {
+        Some(val) => Ok(val.try_into().unwrap()),
         None => Err(ContractError::DisputeNotFound),
     }
+}
+
+/// Load all disputes (this is a stub - full storage iteration is complex in Soroban)
+pub fn load_all_disputes(_env: &Env) -> Vec<Dispute> {
+    // Currently no efficient way to iterate through all disputes in storage
+    // This would require external indexing or careful key tracking
+    Vec::new()
+}
+
+/// Calculate early payment discount
+pub fn calculate_early_payment_discount(
+    amount: i128,
+    discount_percentage: u32,
+) -> i128 {
+    let discount = (amount as u128 * discount_percentage as u128) / 100u128;
+    amount - discount as i128
+}
+
+/// Check if payment qualifies for early payment discount
+pub fn qualifies_for_early_payment(
+    due_date: &TimePoint,
+    payment_date: &TimePoint,
+    early_window: u64,
+) -> bool {
+    let seconds_per_day = 24 * 60 * 60;
+    let early_window_seconds = early_window * seconds_per_day;
+    let time_diff = if due_date.unix_timestamp > payment_date.unix_timestamp {
+        due_date.unix_timestamp - payment_date.unix_timestamp
+    } else {
+        0
+    };
+    
+    time_diff >= early_window_seconds
+}
+
+/// Update dispute information
+pub fn update_dispute(env: &Env, milestone_index: u64, dispute: &Dispute) {
+    let key = get_dispute_key(env, milestone_index);
+    env.storage().instance().set(&key, dispute);
 }
 
 /// Transfer tokens between accounts

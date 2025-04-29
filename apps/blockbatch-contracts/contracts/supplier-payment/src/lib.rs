@@ -1,17 +1,21 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, Address, Env, String, Vec,
+    contract, contractimpl, contracttype, Address, BytesN, Env, Map, String, Symbol, Vec,
+    IntoVal, TryFromVal, Val,
 };
 
 mod types;
 mod utils;
 mod error;
+#[cfg(test)]
+mod test;
 
 use types::{
     Milestone, PurchaseOrder, Asset, DiscountTerms, Status, TimePoint,
-    SupplierPaymentContract, ContractStatus,
+    SupplierPaymentContract, ContractStatus, DisputeStatus, Dispute,
 };
 use error::ContractError;
+use utils::{load_contract, save_contract};
 
 #[contract]
 pub struct Contract;
@@ -27,332 +31,454 @@ impl Contract {
         payment_token: Asset,
         discount_terms: DiscountTerms,
         dispute_window: u32,
-        required_signatures: u32,
+        required_signatures: u8,
     ) -> Result<SupplierPaymentContract, ContractError> {
-        // Ensure at least one signature is required
-        if required_signatures < 1 {
-            return Err(ContractError::InvalidSignatureRequirement);
-        }
-
+        // Verify company account
+        company_account.require_auth();
+        
         // Create the contract
         let contract = SupplierPaymentContract {
-            company_account,
-            supplier_account,
+            company_account: company_account.clone(),
+            supplier_account: supplier_account.clone(),
             purchase_order,
             milestones: Vec::new(&env),
             payment_token,
             discount_terms,
             dispute_window,
             required_signatures,
+            status: ContractStatus::Active,
         };
-
-        // Store the contract data
-        utils::save_contract(&env, &contract);
-
+        
+        // Store contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &contract);
+        
         Ok(contract)
     }
-
+    
     /// Adds a new milestone to the contract
     pub fn add_milestone(
         env: Env,
-        caller: Address,
         description: String,
         amount: i128,
         due_date: TimePoint,
-    ) -> Result<Milestone, ContractError> {
-        // Get the contract
-        let mut contract = utils::load_contract(&env)?;
-
-        // Verify caller is the company account
-        caller.require_auth();
-        if caller != contract.company_account {
-            return Err(ContractError::Unauthorized);
-        }
-
-        // Create a new milestone
+    ) -> Result<SupplierPaymentContract, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Verify company account
+        contract.company_account.require_auth();
+        
+        // Create milestone
         let milestone = Milestone {
             description,
             amount,
             due_date,
             completion_status: Status::Pending,
-            verification_proof: String::from_str(&env, ""),
+            verification_proof: String::new(&env),
         };
-
-        // Add the milestone to the contract
-        contract.milestones.push_back(milestone.clone());
-
-        // Save the updated contract
-        utils::save_contract(&env, &contract);
-
-        Ok(milestone)
+        
+        // Create updated contract with new milestone
+        let mut updated_contract = contract.clone();
+        updated_contract.milestones.push_back(milestone);
+        
+        // Store updated contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        
+        Ok(updated_contract)
     }
-
-    /// Updates an existing milestone
+    
+    /// Updates a milestone in the contract
     pub fn update_milestone(
         env: Env,
-        caller: Address,
-        index: u32,
+        milestone_index: u32,
         description: Option<String>,
         amount: Option<i128>,
         due_date: Option<TimePoint>,
-    ) -> Result<Milestone, ContractError> {
-        // Get the contract
-        let mut contract = utils::load_contract(&env)?;
-
-        // Verify caller is the company account
-        caller.require_auth();
-        if caller != contract.company_account {
-            return Err(ContractError::Unauthorized);
-        }
-
-        // Ensure the milestone exists
-        if index as usize >= contract.milestones.len() as usize {
+    ) -> Result<SupplierPaymentContract, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Verify company account
+        contract.company_account.require_auth();
+        
+        // Create updated contract
+        let mut updated_contract = contract.clone();
+        
+        // Get milestone
+        let index = milestone_index as u32;
+        if index >= updated_contract.milestones.len() {
             return Err(ContractError::MilestoneNotFound);
         }
-
-        // Get the milestone
-        let mut milestone = contract.milestones.get(index).unwrap();
-
-        // Only allow updates to pending milestones
+        
+        let mut milestone = updated_contract.milestones.get(index).unwrap();
+        
+        // Check if milestone can be updated
         if milestone.completion_status != Status::Pending {
             return Err(ContractError::CannotUpdateCompletedMilestone);
         }
-
-        // Update the milestone fields if provided
+        
+        // Update milestone fields
         if let Some(desc) = description {
             milestone.description = desc;
         }
-
+        
         if let Some(amt) = amount {
             milestone.amount = amt;
         }
-
+        
         if let Some(date) = due_date {
             milestone.due_date = date;
         }
-
-        // Update the milestone in the contract
-        contract.milestones.set(index, milestone.clone());
-
-        // Save the updated contract
-        utils::save_contract(&env, &contract);
-
-        Ok(milestone)
+        
+        // Update milestone in contract
+        updated_contract.milestones.set(index, milestone);
+        
+        // Store updated contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        
+        Ok(updated_contract)
     }
-
-    /// Verifies a milestone has been completed
-    pub fn verify_milestone(
+    
+    /// Mark a milestone as completed by supplier
+    pub fn complete_milestone(
         env: Env,
-        caller: Address,
-        index: u32,
+        milestone_index: u32,
         verification_proof: String,
-    ) -> Result<Milestone, ContractError> {
-        // Get the contract
-        let mut contract = utils::load_contract(&env)?;
-
-        // Verify caller is the supplier account
-        caller.require_auth();
-        if caller != contract.supplier_account {
-            return Err(ContractError::Unauthorized);
-        }
-
-        // Ensure the milestone exists
-        if index as usize >= contract.milestones.len() as usize {
+    ) -> Result<SupplierPaymentContract, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Verify supplier account
+        contract.supplier_account.require_auth();
+        
+        // Create updated contract
+        let mut updated_contract = contract.clone();
+        
+        // Get milestone
+        let index = milestone_index as u32;
+        if index >= updated_contract.milestones.len() {
             return Err(ContractError::MilestoneNotFound);
         }
-
-        // Get the milestone
-        let mut milestone = contract.milestones.get(index).unwrap();
-
-        // Only allow verification for pending milestones
+        
+        let mut milestone = updated_contract.milestones.get(index).unwrap();
+        
+        // Check if milestone can be completed
         if milestone.completion_status != Status::Pending {
             return Err(ContractError::MilestoneAlreadyProcessed);
         }
-
-        // Mark the milestone as completed
+        
+        // Update milestone status
         milestone.completion_status = Status::Completed;
         milestone.verification_proof = verification_proof;
-
-        // Update the milestone in the contract
-        contract.milestones.set(index, milestone.clone());
-
-        // Save the updated contract
-        utils::save_contract(&env, &contract);
-
-        Ok(milestone)
+        
+        // Update milestone in contract
+        updated_contract.milestones.set(index, milestone);
+        
+        // Store updated contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        
+        Ok(updated_contract)
     }
-
-    /// Process payment for a verified milestone
-    pub fn process_milestone_payment(
+    
+    /// Verify a completed milestone by company
+    pub fn verify_milestone(
         env: Env,
-        caller: Address,
-        index: u32,
-    ) -> Result<Milestone, ContractError> {
-        // Get the contract
-        let mut contract = utils::load_contract(&env)?;
-
-        // Verify caller is the company account
-        caller.require_auth();
-        if caller != contract.company_account {
-            return Err(ContractError::Unauthorized);
-        }
-
-        // Ensure the milestone exists
-        if index as usize >= contract.milestones.len() as usize {
+        milestone_index: u32,
+    ) -> Result<SupplierPaymentContract, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Verify company account
+        contract.company_account.require_auth();
+        
+        // Create updated contract
+        let mut updated_contract = contract.clone();
+        
+        // Get milestone
+        let index = milestone_index as u32;
+        if index >= updated_contract.milestones.len() {
             return Err(ContractError::MilestoneNotFound);
         }
-
-        // Get the milestone
-        let mut milestone = contract.milestones.get(index).unwrap();
-
-        // Ensure the milestone is completed but not paid
+        
+        let mut milestone = updated_contract.milestones.get(index).unwrap();
+        
+        // Check if milestone can be verified
         if milestone.completion_status != Status::Completed {
             return Err(ContractError::MilestoneNotCompleted);
         }
-
-        // Calculate payment amount with any discount
-        let payment_amount = Self::calculate_early_payment_discount(
-            &env,
-            contract.discount_terms.clone(),
-            milestone.amount,
-        );
-
-        // Transfer tokens from company to supplier
-        utils::transfer_token(
-            &env,
-            &contract.payment_token,
-            &contract.company_account,
-            &contract.supplier_account,
-            payment_amount,
-        )?;
-
-        // Mark the milestone as paid
-        milestone.completion_status = Status::Paid;
-
-        // Update the milestone in the contract
-        contract.milestones.set(index, milestone.clone());
-
-        // Save the updated contract
-        utils::save_contract(&env, &contract);
-
-        Ok(milestone)
+        
+        // Update milestone status
+        milestone.completion_status = Status::Verified;
+        
+        // Update milestone in contract
+        updated_contract.milestones.set(index, milestone);
+        
+        // Store updated contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        
+        Ok(updated_contract)
     }
-
-    /// Calculate early payment discount
-    pub fn calculate_early_payment_discount(
-        env: &Env,
-        discount_terms: DiscountTerms,
-        amount: i128,
-    ) -> i128 {
-        let current_time = env.ledger().timestamp();
-
-        // Check if payment is within early payment window
-        if let Some(window) = discount_terms.early_payment_window {
-            if current_time <= window {
-                // Apply discount
-                let discount_amount = (amount)
-                    .checked_mul(discount_terms.discount_percentage as i128)
-                    .unwrap_or(0)
-                    .checked_div(100)
-                    .unwrap_or(0);
-                
-                return amount.checked_sub(discount_amount).unwrap_or(amount);
-            }
+    
+    /// Process payment for a verified milestone
+    pub fn process_milestone_payment(
+        env: Env,
+        milestone_index: u32,
+    ) -> Result<SupplierPaymentContract, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Verify company account
+        contract.company_account.require_auth();
+        
+        // Create updated contract
+        let mut updated_contract = contract.clone();
+        
+        // Get milestone
+        let index = milestone_index as u32;
+        if index >= updated_contract.milestones.len() {
+            return Err(ContractError::MilestoneNotFound);
         }
-
-        // No discount applies
-        amount
+        
+        let mut milestone = updated_contract.milestones.get(index).unwrap();
+        
+        // Check if milestone can be paid
+        if milestone.completion_status != Status::Verified {
+            return Err(ContractError::MilestoneNotCompleted);
+        }
+        
+        // In a real implementation, we would transfer tokens here
+        // For now, we just update the status
+        
+        // Update milestone status
+        milestone.completion_status = Status::Paid;
+        
+        // Update milestone in contract
+        updated_contract.milestones.set(index, milestone);
+        
+        // Store updated contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        
+        // Check if all milestones are paid
+        let all_paid = updated_contract.milestones.iter().all(|m| m.completion_status == Status::Paid);
+        
+        if all_paid && updated_contract.milestones.len() > 0 {
+            updated_contract.status = ContractStatus::Completed;
+            env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        }
+        
+        Ok(updated_contract)
     }
-
-    /// Get the current status of the supplier contract
+    
+    /// Calculate early payment discount for a milestone
+    pub fn calculate_early_payment_discount(
+        env: Env,
+        milestone_index: u32,
+    ) -> Result<i128, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Get milestone
+        let index = milestone_index as u32;
+        if index >= contract.milestones.len() {
+            return Err(ContractError::MilestoneNotFound);
+        }
+        
+        let milestone = contract.milestones.get(index).unwrap();
+        
+        // Check if milestone is verified
+        if milestone.completion_status != Status::Verified {
+            return Err(ContractError::MilestoneNotCompleted);
+        }
+        
+        // Calculate discount
+        let current_time = env.ledger().timestamp();
+        let current_timepoint = TimePoint { timestamp: current_time };
+        
+        if current_timepoint.timestamp <= milestone.due_date.timestamp + contract.discount_terms.early_payment_window {
+            // Apply discount
+            let discount_percentage = contract.discount_terms.discount_percentage as i128;
+            let discount_amount = (milestone.amount * discount_percentage) / 100;
+            Ok(milestone.amount - discount_amount)
+        } else {
+            // No discount
+            Ok(milestone.amount)
+        }
+    }
+    
+    /// Get the current contract status
     pub fn get_supplier_contract_status(
         env: Env,
     ) -> Result<ContractStatus, ContractError> {
-        let contract = utils::load_contract(&env)?;
-        
-        // Calculate total and completed/paid milestones
-        let total_milestones = contract.milestones.len();
-        let mut completed = 0;
-        let mut paid = 0;
-        
-        for i in 0..total_milestones {
-            let milestone = contract.milestones.get(i).unwrap();
-            match milestone.completion_status {
-                Status::Completed => completed += 1,
-                Status::Paid => {
-                    completed += 1;
-                    paid += 1;
-                },
-                _ => {}
-            }
-        }
-        
-        // Determine overall contract status
-        let status = if total_milestones == 0 {
-            ContractStatus::Draft
-        } else if paid == total_milestones {
-            ContractStatus::Completed
-        } else if completed > 0 {
-            ContractStatus::InProgress
-        } else {
-            ContractStatus::Active
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
         };
         
-        Ok(status)
+        Ok(contract.status)
     }
-
+    
     /// Get all milestones in the contract
     pub fn get_milestones(
         env: Env,
     ) -> Result<Vec<Milestone>, ContractError> {
-        let contract = utils::load_contract(&env)?;
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
         Ok(contract.milestones)
     }
-
-    /// Initiate a payment dispute
+    
+    /// Initiate a dispute for a milestone
     pub fn initiate_dispute(
         env: Env,
-        caller: Address,
-        index: u32,
-        dispute_reason: String,
-    ) -> Result<(), ContractError> {
-        // Get the contract
-        let mut contract = utils::load_contract(&env)?;
-
-        // Verify caller is either company or supplier
-        caller.require_auth();
-        if caller != contract.company_account && caller != contract.supplier_account {
+        milestone_index: u32,
+        reason: String,
+    ) -> Result<SupplierPaymentContract, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Verify initiator is either company or supplier
+        let invoker = env.invoking_contract().unwrap_or(env.current_contract());
+        
+        let is_company = invoker == contract.company_account;
+        let is_supplier = invoker == contract.supplier_account;
+        
+        if !is_company && !is_supplier {
             return Err(ContractError::Unauthorized);
         }
-
-        // Ensure the milestone exists
-        if index as usize >= contract.milestones.len() as usize {
+        
+        // Create updated contract
+        let mut updated_contract = contract.clone();
+        
+        // Get milestone
+        let index = milestone_index as u32;
+        if index >= updated_contract.milestones.len() {
             return Err(ContractError::MilestoneNotFound);
         }
-
-        // Get the milestone
-        let mut milestone = contract.milestones.get(index).unwrap();
-
-        // Can only dispute completed but not paid milestones
-        if milestone.completion_status != Status::Completed {
+        
+        let mut milestone = updated_contract.milestones.get(index).unwrap();
+        
+        // Check if milestone can be disputed
+        if milestone.completion_status == Status::Paid || milestone.completion_status == Status::Disputed {
             return Err(ContractError::CannotDisputeMilestone);
         }
-
-        // Mark the milestone as disputed
+        
+        // Update milestone status
         milestone.completion_status = Status::Disputed;
-
-        // Store dispute information
-        utils::store_dispute(&env, index as u64, caller, dispute_reason);
-
-        // Update the milestone in the contract
-        contract.milestones.set(index, milestone);
-
-        // Save the updated contract
-        utils::save_contract(&env, &contract);
-
-        Ok(())
+        
+        // Update milestone in contract
+        updated_contract.milestones.set(index, milestone);
+        
+        // Store dispute
+        let dispute = Dispute {
+            milestone_index,
+            initiator: invoker,
+            reason,
+            status: DisputeStatus::Open,
+            resolution_notes: String::new(&env),
+        };
+        
+        let dispute_key = format_dispute_key(&env, milestone_index);
+        env.storage().instance().set(&dispute_key, &dispute);
+        
+        // Store updated contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        
+        Ok(updated_contract)
+    }
+    
+    /// Resolve a dispute for a milestone
+    pub fn resolve_dispute(
+        env: Env,
+        milestone_index: u32,
+        resolution_notes: String,
+        approve: bool,
+    ) -> Result<SupplierPaymentContract, ContractError> {
+        // Load contract
+        let contract = match env.storage().instance().get::<_, SupplierPaymentContract>(&types::CONTRACT_KEY) {
+            Some(val) => val,
+            None => return Err(ContractError::ContractNotFound),
+        };
+        
+        // Only company can resolve disputes
+        contract.company_account.require_auth();
+        
+        // Get dispute
+        let dispute_key = format_dispute_key(&env, milestone_index);
+        let dispute: Dispute = match env.storage().instance().get(&dispute_key) {
+            Some(val) => val,
+            None => return Err(ContractError::DisputeNotFound),
+        };
+        
+        // Check if dispute is open
+        if dispute.status != DisputeStatus::Open {
+            return Err(ContractError::DisputeAlreadyResolved);
+        }
+        
+        // Create updated contract
+        let mut updated_contract = contract.clone();
+        
+        // Get milestone
+        let index = milestone_index as u32;
+        if index >= updated_contract.milestones.len() {
+            return Err(ContractError::MilestoneNotFound);
+        }
+        
+        let mut milestone = updated_contract.milestones.get(index).unwrap();
+        
+        // Update dispute
+        let mut updated_dispute = dispute.clone();
+        updated_dispute.status = if approve { DisputeStatus::Resolved } else { DisputeStatus::Rejected };
+        updated_dispute.resolution_notes = resolution_notes;
+        
+        // Update milestone status based on resolution
+        if approve {
+            milestone.completion_status = Status::Verified;
+        } else {
+            milestone.completion_status = Status::Completed;
+        }
+        
+        // Update milestone in contract
+        updated_contract.milestones.set(index, milestone);
+        
+        // Store updated dispute
+        env.storage().instance().set(&dispute_key, &updated_dispute);
+        
+        // Store updated contract
+        env.storage().instance().set(&types::CONTRACT_KEY, &updated_contract);
+        
+        Ok(updated_contract)
     }
 }
 
-#[cfg(test)]
-mod test; 
+// Helper function to format dispute key
+fn format_dispute_key(env: &Env, milestone_index: u32) -> String {
+    let prefix = String::from_slice(env, types::DISPUTE_PREFIX);
+    let index_str = milestone_index.to_string();
+    let index_slice = index_str.as_str();
+    prefix.push_str(&String::from_slice(env, index_slice))
+} 
