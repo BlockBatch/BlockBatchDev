@@ -3,7 +3,7 @@ extern crate std;
 use soroban_sdk::{
     testutils::Address as _,
     token::{StellarAssetClient as TokenAdmin, TokenClient},
-    Address, BytesN, Env, Symbol,
+    Address, BytesN, Env,
 };
 
 // Import the WASM file for the liquidity pool contract

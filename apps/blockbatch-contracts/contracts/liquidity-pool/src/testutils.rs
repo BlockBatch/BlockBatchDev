@@ -3,6 +3,7 @@ extern crate std;
 
 use crate::constants::{BASIS_POINTS_DENOMINATOR, WITHDRAWAL_FEE_BASIS_POINTS};
 use soroban_sdk::{
+    testutils::Address as _,
     token::{StellarAssetClient as TokenAdmin, TokenClient},
     Address, Env,
 };

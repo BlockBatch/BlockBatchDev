@@ -7,6 +7,22 @@ pub struct LiquidityPool;
 
 #[contractimpl]
 impl LiquidityPool {
+    pub fn __constructor(
+        env: Env,
+        admin: Address,
+        fee_collector: Address,
+        pool_assets: Vec<Asset>,
+        allocation_percentage: u32,
+    ) -> Result<(), Error> {
+        Self::initialize(
+            env,
+            admin,
+            fee_collector,
+            pool_assets,
+            allocation_percentage,
+        )
+    }
+
     // Initialize the pool with given parameters
     pub fn initialize(
         env: Env,
@@ -315,7 +331,6 @@ impl LiquidityPool {
         // Verify caller is admin
         Self::verify_admin(&env)?;
 
-        // Get admin address
         let admin: Address = env
             .storage()
             .persistent()
@@ -370,7 +385,7 @@ impl LiquidityPool {
             .get::<PoolDataKey, Address>(&PoolDataKey::FeeCollector)
             .ok_or(Error::Unauthorized)?;
 
-        // Transfer the withdrawal amount to admin
+        // Transfer the withdrawal amount to the stored admin (retrieved above)
         token_client.transfer(&env.current_contract_address(), &admin, &withdrawal_amount);
 
         // Transfer the fee to fee collector
