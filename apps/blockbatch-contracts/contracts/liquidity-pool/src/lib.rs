@@ -1,5 +1,6 @@
 #![no_std]
 
+mod constants;
 mod contract;
 mod types;
 
