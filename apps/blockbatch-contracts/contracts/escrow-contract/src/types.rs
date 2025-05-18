@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, String, Symbol, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,13 +38,39 @@ pub enum DisputeOutcome {
     PartialRelease(i128), // Basis points (10000 = 100%)
 }
 
+// Define a wrapper type for Option<DisputeOutcome>
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeOutcomeOption {
+    None,
+    Some(DisputeOutcome),
+}
+
+impl From<Option<DisputeOutcome>> for DisputeOutcomeOption {
+    fn from(opt: Option<DisputeOutcome>) -> Self {
+        match opt {
+            Some(outcome) => DisputeOutcomeOption::Some(outcome),
+            None => DisputeOutcomeOption::None,
+        }
+    }
+}
+
+impl From<DisputeOutcomeOption> for Option<DisputeOutcome> {
+    fn from(opt: DisputeOutcomeOption) -> Self {
+        match opt {
+            DisputeOutcomeOption::Some(outcome) => Some(outcome),
+            DisputeOutcomeOption::None => None,
+        }
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisputeProcess {
     pub initiator: Address,
     pub reason: String,
     pub is_active: bool,
-    pub outcome: Option<DisputeOutcome>,
+    pub outcome: DisputeOutcomeOption,
 }
 
 #[contracttype]
@@ -74,15 +100,15 @@ pub enum EscrowError {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
-    Admin,                    // Admin address
-    Depositor,                // Depositor address
-    Beneficiary,              // Beneficiary address
-    Arbitrator,               // Arbitrator address
-    DepositAccount,           // Deposit account address
-    Asset,                    // Asset details
-    Amount,                   // Escrow amount
-    ReleaseConditions,        // List of release conditions
-    TimeoutTime,              // Timeout timestamp
-    DisputeResolution,        // Dispute process details
-    Status,                   // Escrow status
+    Admin,             // Admin address
+    Depositor,         // Depositor address
+    Beneficiary,       // Beneficiary address
+    Arbitrator,        // Arbitrator address
+    DepositAccount,    // Deposit account address
+    Asset,             // Asset details
+    Amount,            // Escrow amount
+    ReleaseConditions, // List of release conditions
+    TimeoutTime,       // Timeout timestamp
+    DisputeResolution, // Dispute process details
+    Status,            // Escrow status
 }

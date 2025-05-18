@@ -1,7 +1,8 @@
-use crate::types::{Asset, Condition, DataKey, DisputeOutcome, DisputeProcess, EscrowError, EscrowStatus};
-use soroban_sdk::{
-    contract, contractimpl, token, Address, Env, IntoVal, String, Symbol, Vec, symbol_short
+use crate::types::{
+    Asset, Condition, DataKey, DisputeOutcome, DisputeOutcomeOption, DisputeProcess, EscrowError,
+    EscrowStatus,
 };
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Vec};
 
 #[contract]
 pub struct EscrowContract;
@@ -27,23 +28,46 @@ impl EscrowContract {
         }
 
         env.storage().persistent().set(&DataKey::Admin, &admin);
-        env.storage().persistent().set(&DataKey::Depositor, &depositor);
-        env.storage().persistent().set(&DataKey::Beneficiary, &beneficiary);
-        env.storage().persistent().set(&DataKey::Arbitrator, &arbitrator);
-        env.storage().persistent().set(&DataKey::DepositAccount, &deposit_account);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Depositor, &depositor);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Beneficiary, &beneficiary);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Arbitrator, &arbitrator);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DepositAccount, &deposit_account);
         env.storage().persistent().set(&DataKey::Asset, &asset);
         env.storage().persistent().set(&DataKey::Amount, &amount);
-        env.storage().persistent().set(&DataKey::ReleaseConditions, &Vec::<Condition>::new(&env));
-        env.storage().persistent().set(&DataKey::TimeoutTime, &(env.ledger().timestamp() + (timeout_ledger as u64 * 5)));
-        env.storage().persistent().set(&DataKey::DisputeResolution, &Option::<DisputeProcess>::None);
-        env.storage().persistent().set(&DataKey::Status, &EscrowStatus::Initialized);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ReleaseConditions, &Vec::<Condition>::new(&env));
+        env.storage().persistent().set(
+            &DataKey::TimeoutTime,
+            &(env.ledger().timestamp() + (timeout_ledger as u64 * 5)),
+        );
 
-        env.events().publish((
-            symbol_short!("created"),
-            depositor,
-            beneficiary,
-            arbitrator
-        ), amount);
+        // Initialize DisputeProcess with DisputeOutcomeOption::None
+        let dispute_process = DisputeProcess {
+            initiator: admin.clone(),
+            reason: String::from_str(&env, ""),
+            is_active: false,
+            outcome: DisputeOutcomeOption::None,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeResolution, &Some(dispute_process));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status, &EscrowStatus::Initialized);
+
+        env.events().publish(
+            (symbol_short!("created"), depositor, beneficiary, arbitrator),
+            amount,
+        );
 
         Ok(())
     }
@@ -68,18 +92,14 @@ impl EscrowContract {
         depositor.require_auth();
 
         let token_client = token::Client::new(&env, &asset.token);
-        token_client.transfer(
-            &depositor,
-            &deposit_account,
-            &amount
-        );
+        token_client.transfer(&depositor, &deposit_account, &amount);
 
-        env.storage().persistent().set(&DataKey::Status, &EscrowStatus::Funded);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status, &EscrowStatus::Funded);
 
-        env.events().publish((
-            symbol_short!("deposited"),
-            depositor
-        ), amount);
+        env.events()
+            .publish((symbol_short!("deposited"), depositor), amount);
 
         Ok(())
     }
@@ -104,15 +124,18 @@ impl EscrowContract {
 
         caller.require_auth();
 
-        let mut conditions: Vec<Condition> = env.storage().persistent()
+        let mut conditions: Vec<Condition> = env
+            .storage()
+            .persistent()
             .get(&DataKey::ReleaseConditions)
             .unwrap_or_else(|| Vec::new(&env));
         conditions.push_back(condition.clone());
-        env.storage().persistent().set(&DataKey::ReleaseConditions, &conditions);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ReleaseConditions, &conditions);
 
-        env.events().publish((
-            symbol_short!("cond_add"),
-        ), condition.description);
+        env.events()
+            .publish((symbol_short!("cond_add"),), condition.description);
 
         Ok(())
     }
@@ -128,17 +151,20 @@ impl EscrowContract {
         if arbitrator != stored_arbitrator {
             return Err(EscrowError::Unauthorized);
         }
-        if status != EscrowStatus::Funded {
+        if status != EscrowStatus::Funded && status != EscrowStatus::ConditionsMet {
             return Err(EscrowError::InvalidStatus);
         }
 
         arbitrator.require_auth();
 
-        let mut conditions: Vec<Condition> = env.storage().persistent()
+        let mut conditions: Vec<Condition> = env
+            .storage()
+            .persistent()
             .get(&DataKey::ReleaseConditions)
             .ok_or(EscrowError::InvalidCondition)?;
 
-        let condition = conditions.get(condition_index)
+        let condition = conditions
+            .get(condition_index)
             .ok_or(EscrowError::InvalidCondition)?;
 
         if condition.is_fulfilled {
@@ -148,16 +174,19 @@ impl EscrowContract {
         let mut condition = condition.clone();
         condition.is_fulfilled = true;
         conditions.set(condition_index, condition);
-        env.storage().persistent().set(&DataKey::ReleaseConditions, &conditions);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ReleaseConditions, &conditions);
 
         let all_conditions_met = conditions.iter().all(|c| c.is_fulfilled);
         if all_conditions_met {
-            env.storage().persistent().set(&DataKey::Status, &EscrowStatus::ConditionsMet);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Status, &EscrowStatus::ConditionsMet);
         }
 
-        env.events().publish((
-            symbol_short!("cond_ver"),
-        ), condition_index);
+        env.events()
+            .publish((symbol_short!("cond_ver"),), condition_index);
 
         Ok(())
     }
@@ -183,19 +212,16 @@ impl EscrowContract {
 
         caller.require_auth();
 
+        // Create token client
         let token_client = token::Client::new(&env, &asset.token);
-        token_client.transfer(
-            &deposit_account,
-            &beneficiary,
-            &amount
-        );
+        token_client.transfer(&deposit_account, &beneficiary, &amount);
 
-        env.storage().persistent().set(&DataKey::Status, &EscrowStatus::Released);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status, &EscrowStatus::Released);
 
-        env.events().publish((
-            symbol_short!("released"),
-            beneficiary
-        ), amount);
+        env.events()
+            .publish((symbol_short!("released"), beneficiary), amount);
 
         Ok(())
     }
@@ -222,18 +248,14 @@ impl EscrowContract {
         caller.require_auth();
 
         let token_client = token::Client::new(&env, &asset.token);
-        token_client.transfer(
-            &deposit_account,
-            &depositor,
-            &amount
-        );
+        token_client.transfer(&deposit_account, &depositor, &amount);
 
-        env.storage().persistent().set(&DataKey::Status, &EscrowStatus::Refunded);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status, &EscrowStatus::Refunded);
 
-        env.events().publish((
-            symbol_short!("refunded"),
-            depositor
-        ), amount);
+        env.events()
+            .publish((symbol_short!("refunded"), depositor), amount);
 
         Ok(())
     }
@@ -251,7 +273,8 @@ impl EscrowContract {
         if initiator != depositor && initiator != beneficiary {
             return Err(EscrowError::Unauthorized);
         }
-        if status != EscrowStatus::Funded {
+        // Allow disputes for both Funded and ConditionsMet status
+        if status != EscrowStatus::Funded && status != EscrowStatus::ConditionsMet {
             return Err(EscrowError::InvalidStatus);
         }
         if dispute.is_some() && dispute.as_ref().unwrap().is_active {
@@ -264,16 +287,18 @@ impl EscrowContract {
             initiator: initiator.clone(),
             reason,
             is_active: true,
-            outcome: None,
+            outcome: DisputeOutcomeOption::None,
         };
 
-        env.storage().persistent().set(&DataKey::DisputeResolution, &Some(dispute));
-        env.storage().persistent().set(&DataKey::Status, &EscrowStatus::InDispute);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeResolution, &Some(dispute));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status, &EscrowStatus::InDispute);
 
-        env.events().publish((
-            symbol_short!("disp_init"),
-            initiator
-        ), true);
+        env.events()
+            .publish((symbol_short!("disp_init"), initiator), true);
 
         Ok(())
     }
@@ -305,18 +330,10 @@ impl EscrowContract {
 
         match outcome {
             DisputeOutcome::ReleaseToBeneficiary => {
-                token_client.transfer(
-                    &deposit_account,
-                    &beneficiary,
-                    &amount
-                );
+                token_client.transfer(&deposit_account, &beneficiary, &amount);
             }
             DisputeOutcome::RefundToDepositor => {
-                token_client.transfer(
-                    &deposit_account,
-                    &depositor,
-                    &amount
-                );
+                token_client.transfer(&deposit_account, &depositor, &amount);
             }
             DisputeOutcome::PartialRelease(basis_points) => {
                 if basis_points <= 0 || basis_points >= 10000 {
@@ -325,29 +342,23 @@ impl EscrowContract {
                 let beneficiary_amount = (amount * basis_points) / 10000;
                 let depositor_amount = amount - beneficiary_amount;
 
-                token_client.transfer(
-                    &deposit_account,
-                    &beneficiary,
-                    &beneficiary_amount
-                );
-                token_client.transfer(
-                    &deposit_account,
-                    &depositor,
-                    &depositor_amount
-                );
+                token_client.transfer(&deposit_account, &beneficiary, &beneficiary_amount);
+                token_client.transfer(&deposit_account, &depositor, &depositor_amount);
             }
         }
 
         let mut dispute = dispute.clone();
         dispute.is_active = false;
-        dispute.outcome = Some(outcome);
-        env.storage().persistent().set(&DataKey::DisputeResolution, &Some(dispute));
-        env.storage().persistent().set(&DataKey::Status, &EscrowStatus::Resolved);
+        dispute.outcome = DisputeOutcomeOption::Some(outcome);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeResolution, &Some(dispute));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status, &EscrowStatus::Resolved);
 
-        env.events().publish((
-            symbol_short!("disp_res"),
-            arbitrator
-        ), true);
+        env.events()
+            .publish((symbol_short!("disp_res"), arbitrator), true);
 
         Ok(())
     }
@@ -358,61 +369,71 @@ impl EscrowContract {
 
     // Helper functions
     fn get_admin(env: &Env) -> Result<Address, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_depositor(env: &Env) -> Result<Address, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Depositor)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_beneficiary(env: &Env) -> Result<Address, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Beneficiary)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_arbitrator(env: &Env) -> Result<Address, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Arbitrator)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_deposit_account(env: &Env) -> Result<Address, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::DepositAccount)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_asset(env: &Env) -> Result<Asset, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Asset)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_amount(env: &Env) -> Result<i128, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Amount)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_timeout_time(env: &Env) -> Result<u64, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::TimeoutTime)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_dispute_resolution(env: &Env) -> Result<Option<DisputeProcess>, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::DisputeResolution)
             .ok_or(EscrowError::NotInitialized)
     }
 
     fn get_status(env: &Env) -> Result<EscrowStatus, EscrowError> {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Status)
             .ok_or(EscrowError::NotInitialized)
     }
