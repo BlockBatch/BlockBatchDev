@@ -2,7 +2,9 @@ use crate::types::{
     Asset, Condition, DataKey, DisputeOutcome, DisputeOutcomeOption, DisputeProcess, EscrowError,
     EscrowStatus,
 };
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Vec};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token::Client, Address, Env, String, Vec,
+};
 
 #[contract]
 pub struct EscrowContract;
@@ -91,7 +93,7 @@ impl EscrowContract {
 
         depositor.require_auth();
 
-        let token_client = token::Client::new(&env, &asset.token);
+        let token_client = Client::new(&env, &asset.token);
         token_client.transfer(&depositor, &deposit_account, &amount);
 
         env.storage()
@@ -212,9 +214,18 @@ impl EscrowContract {
 
         caller.require_auth();
 
-        // Create token client
-        let token_client = token::Client::new(&env, &asset.token);
-        token_client.transfer(&deposit_account, &beneficiary, &amount);
+        // Would work in multi-signatory scenario and remove need for transfer_from
+        // deposit_account.require_auth();
+        // token_client.transfer(&deposit_account, &beneficiary, &amount);
+
+        // Create token client and release funds using transfer_from with contract as spender
+        let token_client = Client::new(&env, &asset.token);
+        token_client.transfer_from(
+            &env.current_contract_address(),
+            &deposit_account,
+            &beneficiary,
+            &amount,
+        );
 
         env.storage()
             .persistent()
@@ -247,8 +258,14 @@ impl EscrowContract {
 
         caller.require_auth();
 
-        let token_client = token::Client::new(&env, &asset.token);
-        token_client.transfer(&deposit_account, &depositor, &amount);
+        // Create token client and release funds
+        let token_client = Client::new(&env, &asset.token);
+        token_client.transfer_from(
+            &env.current_contract_address(),
+            &deposit_account,
+            &depositor,
+            &amount,
+        );
 
         env.storage()
             .persistent()
@@ -326,14 +343,24 @@ impl EscrowContract {
 
         arbitrator.require_auth();
 
-        let token_client = token::Client::new(&env, &asset.token);
+        let token_client = Client::new(&env, &asset.token);
 
         match outcome {
             DisputeOutcome::ReleaseToBeneficiary => {
-                token_client.transfer(&deposit_account, &beneficiary, &amount);
+                token_client.transfer_from(
+                    &env.current_contract_address(),
+                    &deposit_account,
+                    &beneficiary,
+                    &amount,
+                );
             }
             DisputeOutcome::RefundToDepositor => {
-                token_client.transfer(&deposit_account, &depositor, &amount);
+                token_client.transfer_from(
+                    &env.current_contract_address(),
+                    &deposit_account,
+                    &depositor,
+                    &amount,
+                );
             }
             DisputeOutcome::PartialRelease(basis_points) => {
                 if basis_points <= 0 || basis_points >= 10000 {
@@ -342,8 +369,18 @@ impl EscrowContract {
                 let beneficiary_amount = (amount * basis_points) / 10000;
                 let depositor_amount = amount - beneficiary_amount;
 
-                token_client.transfer(&deposit_account, &beneficiary, &beneficiary_amount);
-                token_client.transfer(&deposit_account, &depositor, &depositor_amount);
+                token_client.transfer_from(
+                    &env.current_contract_address(),
+                    &deposit_account,
+                    &beneficiary,
+                    &beneficiary_amount,
+                );
+                token_client.transfer_from(
+                    &env.current_contract_address(),
+                    &deposit_account,
+                    &depositor,
+                    &depositor_amount,
+                );
             }
         }
 
@@ -368,7 +405,8 @@ impl EscrowContract {
     }
 
     // Helper functions
-    fn get_admin(env: &Env) -> Result<Address, EscrowError> {
+    #[allow(dead_code)]
+    pub fn get_admin(env: &Env) -> Result<Address, EscrowError> {
         env.storage()
             .persistent()
             .get(&DataKey::Admin)
