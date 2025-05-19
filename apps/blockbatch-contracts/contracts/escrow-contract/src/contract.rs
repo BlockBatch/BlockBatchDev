@@ -2,9 +2,7 @@ use crate::types::{
     Asset, Condition, DataKey, DisputeOutcome, DisputeOutcomeOption, DisputeProcess, EscrowError,
     EscrowStatus,
 };
-use soroban_sdk::{
-    contract, contractimpl, symbol_short, token::Client, Address, Env, String, Vec,
-};
+use soroban_sdk::{contract, contractimpl, symbol_short, token::Client, Address, Env, String, Vec};
 
 #[contract]
 pub struct EscrowContract;

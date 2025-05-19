@@ -1,4 +1,4 @@
-use crate::types::Asset;
+use crate::types::{Asset, Condition, ConditionType};
 use soroban_sdk::{token::StellarAssetClient, Address, Env, String};
 
 pub fn create_token_contract<'a>(
@@ -23,12 +23,8 @@ pub fn mint_tokens(token_admin: &StellarAssetClient, to: &Address, amount: &i128
     token_admin.mint(to, amount);
 }
 
-pub fn create_condition(
-    env: &Env,
-    description: &str,
-    condition_type: crate::types::ConditionType,
-) -> crate::types::Condition {
-    crate::types::Condition {
+pub fn create_condition(env: &Env, description: &str, condition_type: ConditionType) -> Condition {
+    Condition {
         condition_type,
         description: String::from_str(env, description),
         verification_method: String::from_str(env, "manual"),
